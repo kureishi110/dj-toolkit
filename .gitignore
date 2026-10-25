@@ -1,0 +1,45 @@
+# ── Audio. Never. ──────────────────────────────────────────────────────────
+*.mp3
+*.wav
+*.flac
+*.aiff
+*.aif
+*.m4a
+*.aac
+*.ogg
+
+# ── Generated library data (contains a personal music library) ─────────────
+itunes_library.json
+dj_dashboard.html
+resolved_*.csv
+flagged.txt
+*.tsv
+
+# ── Working directories the pipeline creates ───────────────────────────────
+_incomplete/
+_review/
+converted/
+spectrograms/
+batch_*/
+new_batch_*/
+
+# ── Spectrogram / plot output ──────────────────────────────────────────────
+*.png
+*.jpg
+
+# ── Python ─────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# ── Credentials. The sldl config holds a Soulseek username and password. ───
+.sldl.conf
+sldl.conf
+config.yaml
+.env
+
+# ── macOS ──────────────────────────────────────────────────────────────────
+.DS_Store

@@ -1,0 +1,23 @@
+# ── Required ───────────────────────────────────────────────────────────────
+# analyze_tracks.py imports essentia at module level — it will not run without
+# it. On macOS the wheel can be awkward; `brew install essentia` or conda is
+# usually less painful than pip.
+essentia>=2.1b6.dev1034
+
+# Tag read/write (analyze_tracks.py, dj_grab.py, recover_batches.py)
+mutagen>=1.47.0
+
+# Spectrogram + cutoff detection (check_quality.py exits if these are missing)
+numpy>=1.24.0
+librosa>=0.10.1
+matplotlib>=3.7.0
+
+# ── Optional ───────────────────────────────────────────────────────────────
+# Rekordbox BPM/key status in dj_dashboard.py. Imported lazily — the dashboard
+# still builds without it, just without the Rekordbox panel.
+pyrekordbox>=0.3.0
+
+# ── External binaries (not pip) ────────────────────────────────────────────
+#   sldl     — Soulseek CLI, https://github.com/fiso64/slsk-batchdl
+#   ffmpeg   — used for audio probing
+#   cliclick — slsk_batch_download.py only (brew install cliclick)
