@@ -45,8 +45,10 @@ All tools live in `~/Music/DJ Downloads/`.
 ### PRIMARY: dj_grab.py — The One Command
 ```bash
 python3 ~/Music/DJ\ Downloads/dj_grab.py /tmp/tracks.csv
-python3 ~/Music/DJ\ Downloads/dj_grab.py /tmp/tracks.csv --playlist "Melodic House"
 ```
+⛔ There is NO `--playlist` flag on dj_grab.py. Playlists are derived
+automatically from the artist map. The only flags are `--skip-analyze` and
+`--skip-import`.
 This is the ONLY download command Tanya needs to paste. It:
 1. Checks iTunes for dupes (skips already-owned tracks)
 2. Creates a fresh timestamped temp dir `/tmp/dj_batch_YYYYMMDD_HHMMSS/`

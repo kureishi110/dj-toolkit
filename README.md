@@ -12,8 +12,12 @@ mine. Paths are overridable with `DJ_DIR`.
 
 ```bash
 python3 dj_grab.py tracks.csv
-python3 dj_grab.py tracks.csv --playlist "Melodic House"
+python3 dj_grab.py tracks.csv --skip-analyze --skip-import   # download + quality gate only
 ```
+
+Playlist assignment is automatic — `dj_grab.py` derives it from the artist map,
+so there is no `--playlist` flag here. If you want to force a playlist, that
+lives on `slsk_batch_download.py --playlist "Melodic House"`.
 
 `tracks.csv` is two columns, `Artist,Title`. From there `dj_grab.py` runs the
 whole chain and everything else in this repo is a stage of it you can also run
