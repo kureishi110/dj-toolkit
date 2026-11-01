@@ -30,6 +30,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import date
 from pathlib import Path
 
@@ -155,8 +156,16 @@ def add_one(path):
     return None
 
 
-def apply_tags(dbid, tags):
-    """Write tags onto an already-imported track. Returns list of fields set."""
+def apply_tags(dbid, tags, attempts=5):
+    """
+    Write tags onto an already-imported track. Returns list of fields set.
+
+    ⚠️ RETRIES ON PURPOSE. `add POSIX file` returns as soon as Music accepts
+    the file, but Music is still copying it into the media folder — and a
+    `set name of t` against a track mid-copy fails with "Parameter error
+    (-50)". A 72MB WAV reliably lost every tag this way. The add is fine; only
+    the write has to wait. Found 2026-11-01.
+    """
     lines, applied = [], []
     for key, prop in TAG_MAP:
         val = tags.get(key)
@@ -182,11 +191,20 @@ def apply_tags(dbid, tags):
               f'  set t to (first track of library playlist 1 whose database ID is {dbid})\n'
               + '\n'.join(lines) + '\n'
               'end tell')
-    r = run_osa(script)
-    if r.returncode != 0:
-        print(f"     ⚠ tag write failed: {(r.stderr or '').strip()[:160]}")
-        return []
-    return applied
+
+    last = ""
+    for i in range(attempts):
+        r = run_osa(script)
+        if r.returncode == 0:
+            return applied
+        last = (r.stderr or '').strip()
+        # -50 means Music is still ingesting the file. Back off and retry.
+        if '-50' not in last and 'Parameter error' not in last:
+            break
+        time.sleep(1.5 * (i + 1))
+
+    print(f"     ⚠ tag write failed after {attempts} attempt(s): {last[:150]}")
+    return []
 
 
 def update_library_cache():
@@ -260,8 +278,15 @@ def main():
             print("     (dry run — would import)")
             continue
 
-        # Read tags BEFORE the add: the source is the only reliable place they exist.
-        tags, _ = read_tags(path)
+        # Read tags from the ORIGINAL file, not the transcoded one. A WAV INFO
+        # chunk cannot hold everything a FLAC can — album_artist and composer
+        # are silently dropped in transcode — so `src` is the richer source.
+        tags, _ = read_tags(src)
+        if path != src:
+            # Anything the WAV does carry wins, in case ffmpeg normalised it.
+            wav_tags, _ = read_tags(path)
+            tags = {**tags, **{k: v for k, v in wav_tags.items() if v}}
+        tags.pop('encoder', None)
         if not tags.get('title') and not tags.get('artist'):
             tags = {**tags_from_filename(path), **tags}
 
