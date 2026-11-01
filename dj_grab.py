@@ -11,7 +11,7 @@ Steps:
   3. Quality check the new files; move REJECTs to _rejected/ so they can't import
   4. Key + energy analysis
   5. Import to iTunes (FLAC is transcoded to WAV — Music cannot play FLAC)
-  6. Add every track to "Claimed Songs" + auto-detected genre playlist
+  6. Add every track to PRIMARY_PLAYLIST ("Tanya's Tracks") + genre playlists
 
 CSV columns: Artist, Title, and optionally Album and Length (seconds). Album
 and Length are what let sldl tell an album original from a same-named DJ edit.
@@ -30,6 +30,11 @@ SLDL_CFG = Path(os.environ.get("SLDL_CONF", HOME / ".sldl.conf")).expanduser()
 HERE = Path(__file__).resolve().parent
 
 AUDIO_EXTS = {".mp3", ".wav", ".flac", ".aiff", ".m4a"}
+
+# Every grab lands here as well as in its genre playlists. Was hardcoded to
+# "Claimed Songs", which no longer exists — the playlist is now "Tanya's
+# Tracks". Override with DJ_PRIMARY_PLAYLIST.
+PRIMARY_PLAYLIST = os.environ.get("DJ_PRIMARY_PLAYLIST", "Tanya's Tracks")
 
 # ── Artist → playlists map ─────────────────────────────────────────────────
 # Primary classification source. Tracks go in ALL matching playlists.
@@ -303,31 +308,66 @@ def classify_track(filepath, title, artist):
                     playlists = pls
                     break
 
-    return playlists  # empty = unknown, goes to Claimed Songs only
+    return playlists  # empty = unknown, goes to PRIMARY_PLAYLIST only
 
-def add_to_playlists(title, playlists):
-    """Add a track (looked up by title) to the given iTunes playlists."""
-    safe_title = title.replace('"', '').replace("'", "\\'")
-    playlist_cmds = "\n".join(
-        f'duplicate theTrack to playlist "{pl}"'
-        for pl in playlists
+def _as_str(s):
+    """Escape for an AppleScript double-quoted literal. Only \\ and " need it —
+    the old code stripped quotes and backslash-escaped apostrophes, which is
+    not AppleScript syntax and corrupted any title containing one."""
+    return str(s).replace("\\", "\\\\").replace('"', '\\"')
+
+def add_to_playlists(title, playlists, artist=None):
+    """
+    Add a track to the given playlists, creating any that do not exist.
+
+    ⛔ Two bugs lived here. (1) The primary playlist was hardcoded to
+    "Claimed Songs", which was renamed to "Tanya's Tracks" long ago — so
+    `duplicate ... to playlist "Claimed Songs"` raised, the whole script
+    aborted, and EVERY run's playlist assignment failed while reporting
+    "not found in iTunes". (2) Lookup was `name contains title` + `item 1`,
+    which picked an arbitrary version of a multi-version track. Now: exact
+    name match, artist-filtered, newest first (the fresh import), and a
+    missing playlist is created rather than fatal. Fixed 2026-11-01.
+    """
+    artist_clause = (f' and artist is "{_as_str(artist)}"' if artist else "")
+    # Build each add as its own guarded block so one bad playlist cannot
+    # abort the rest.
+    blocks = []
+    for pl in playlists:
+        p = _as_str(pl)
+        blocks.append(
+            f'  try\n'
+            f'    if not (exists user playlist "{p}") then make new user playlist with properties {{name:"{p}"}}\n'
+            f'    duplicate theTrack to user playlist "{p}"\n'
+            f'    set done to done & "{p}, "\n'
+            f'  on error errMsg\n'
+            f'    set failed to failed & "{p} (" & errMsg & "), "\n'
+            f'  end try'
+        )
+    script = (
+        'tell application "Music"\n'
+        '  set done to ""\n'
+        '  set failed to ""\n'
+        f'  set results to (every track of library playlist 1 whose name is "{_as_str(title)}"{artist_clause})\n'
+        '  if (count of results) is 0 then return "not found"\n'
+        # Highest database ID = most recently added = the file just imported.
+        '  set theTrack to item 1 of results\n'
+        '  repeat with t in results\n'
+        '    if (database ID of t) > (database ID of theTrack) then set theTrack to t\n'
+        '  end repeat\n'
+        + '\n'.join(blocks) + '\n'
+        '  if failed is not "" then return "partial: added " & done & "| failed " & failed\n'
+        '  return "ok"\n'
+        'end tell'
     )
-    script = f'''
-tell application "Music"
-  set results to (every track of library playlist 1 whose name contains "{safe_title}")
-  if (count of results) > 0 then
-    set theTrack to item 1 of results
-    {playlist_cmds}
-    return "ok"
-  else
-    return "not found"
-  end if
-end tell'''
     r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
-    return r.stdout.strip()
+    out = (r.stdout or "").strip()
+    if not out:
+        return f"error: {(r.stderr or 'unknown').strip()[:120]}"
+    return out
 
 def assign_playlists(audio_dir, downloaded_tracks):
-    """For each downloaded track: classify genre, add to Claimed Songs + genre playlist."""
+    """For each track: classify genre, add to PRIMARY_PLAYLIST + genre playlists."""
     print("\n  Assigning playlists...")
 
     # Build a title→filepath map from what's in the audio dir
@@ -348,18 +388,23 @@ def assign_playlists(audio_dir, downloaded_tracks):
                 break
 
         genre_playlists = classify_track(match, title, artist) if match else []
-        all_playlists   = ["Claimed Songs"] + genre_playlists
+        all_playlists   = [PRIMARY_PLAYLIST] + genre_playlists
 
-        result = add_to_playlists(title, all_playlists)
-        status = "✓" if result == "ok" else "⚠ not found in iTunes"
-        playlist_str = ", ".join(all_playlists) if genre_playlists else "Claimed Songs (genre unknown)"
+        result = add_to_playlists(title, all_playlists, artist=artist)
+        if result == "ok":
+            status = "✓"
+        elif result == "not found":
+            status = "⚠ track not in iTunes (did the import fail?)"
+        else:
+            status = f"⚠ {result}"
+        playlist_str = ", ".join(all_playlists) if genre_playlists else f"{PRIMARY_PLAYLIST} (genre unknown)"
         log(f"{status}  {artist} — {title}  →  {playlist_str}")
 
         if not genre_playlists:
             unmatched.append(f"{artist} — {title}")
 
     if unmatched:
-        print(f"\n  ⚠ No genre detected for {len(unmatched)} track(s) — added to Claimed Songs only:")
+        print(f"\n  ⚠ No genre detected for {len(unmatched)} track(s) — added to {PRIMARY_PLAYLIST} only:")
         for t in unmatched:
             log(t)
 
