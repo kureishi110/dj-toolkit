@@ -6,12 +6,15 @@ Usage:
   python3 ~/Music/DJ\ Downloads/dj_grab.py tracks.csv
 
 Steps:
-  1. Check iTunes — skip tracks already in library
+  1. Check iTunes — skip tracks whose title matches EXACTLY (--force to skip)
   2. Download via sldl to a fresh temp dir
-  3. Quality check new files only (delete WARNs/REJECTs)
+  3. Quality check the new files; move REJECTs to _rejected/ so they can't import
   4. Key + energy analysis
-  5. Import to iTunes
+  5. Import to iTunes (FLAC is transcoded to WAV — Music cannot play FLAC)
   6. Add every track to "Claimed Songs" + auto-detected genre playlist
+
+CSV columns: Artist, Title, and optionally Album and Length (seconds). Album
+and Length are what let sldl tell an album original from a same-named DJ edit.
 """
 
 import os, sys, csv, subprocess, time, argparse
@@ -100,31 +103,73 @@ def log(msg): print(f"  {msg}", flush=True)
 
 # ── 1. iTunes dupe check ───────────────────────────────────────────────────
 
-def itunes_has_track(title: str, artist: str) -> bool:
+def itunes_match(title: str, artist: str):
+    """
+    Returns (exact_hit, [near_miss_titles]).
+
+    ⛔ This used to test `name of track CONTAINS title`, which made it
+    impossible to grab a different version of something already owned: asking
+    for "Alejandro" matched "Alejandro (Quick Edit) (DMS Intro)" and the whole
+    download was skipped as a dupe. Now the skip needs an EXACT title match,
+    and anything that merely contains it is reported as a near miss so the
+    near-dupe is visible rather than silently decisive. Fixed 2026-11-01.
+    """
     safe_t = title.replace('"', '').replace("'", "")
     safe_a = artist.replace('"', '').replace("'", "")
     script = f'''
 tell application "Music"
+  set exact to "no"
+  set near to ""
   set r to (search playlist "Library" for "{safe_t}" only songs)
   repeat with tr in r
-    if (name of tr as string) contains "{safe_t}" and (artist of tr as string) contains "{safe_a}" then return "true"
+    set n to (name of tr as string)
+    if (artist of tr as string) contains "{safe_a}" then
+      if n is "{safe_t}" then
+        set exact to "yes"
+      else if n contains "{safe_t}" then
+        set near to near & n & "~~"
+      end if
+    end if
   end repeat
-  return "false"
+  return exact & "||" & near
 end tell'''
     r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
-    return r.stdout.strip() == "true"
+    out = (r.stdout or "").strip()
+    exact_s, _, near_s = out.partition("||")
+    near = [n for n in near_s.split("~~") if n]
+    return exact_s.strip() == "yes", near
 
-def filter_dupes(tracks):
+def itunes_has_track(title: str, artist: str) -> bool:
+    """Kept for callers that only want the boolean."""
+    return itunes_match(title, artist)[0]
+
+def filter_dupes(tracks, force=False):
+    """Split into (missing, found). With force=True nothing is treated as a dupe."""
     missing, found = [], []
     for t in tracks:
-        (found if itunes_has_track(t["Title"], t["Artist"]) else missing).append(t)
+        if force:
+            missing.append(t)
+            continue
+        exact, near = itunes_match(t["Title"], t["Artist"])
+        if exact:
+            found.append(t)
+        else:
+            if near:
+                t["_near"] = near
+            missing.append(t)
     return missing, found
 
 # ── 2. CSV ─────────────────────────────────────────────────────────────────
 
+# sldl reads Album and Length from the CSV and uses them to pick between
+# results. Dropping them (as this did) threw away the only signal that
+# distinguishes an album original from a DJ edit of the same name.
+CSV_FIELDS = ["Artist", "Title", "Album", "Length"]
+
 def write_csv(tracks, path):
     with open(path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["Artist", "Title"])
+        # extrasaction="ignore" so internal keys like _near never reach the file.
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
         w.writeheader()
         w.writerows(tracks)
 
@@ -134,7 +179,11 @@ def load_csv(path):
         reader = csv.DictReader(f)
         if reader.fieldnames and "Artist" in reader.fieldnames:
             for row in reader:
-                tracks.append({"Artist": row["Artist"].strip(), "Title": row["Title"].strip()})
+                t = {"Artist": row["Artist"].strip(), "Title": row["Title"].strip()}
+                for opt in ("Album", "Length"):
+                    if row.get(opt) and row[opt].strip():
+                        t[opt] = row[opt].strip()
+                tracks.append(t)
         else:
             f.seek(0)
             for line in f:
@@ -164,6 +213,15 @@ def find_audio_dir(out_dir):
 # ── 4. Quality check ──────────────────────────────────────────────────────
 
 def run_quality_check(folder):
+    """
+    Runs the cutoff/spectrogram check and QUARANTINES anything it rejects.
+
+    The docstring used to claim this step deleted WARNs and REJECTs. It did
+    not — it only printed them, so upconverted files sailed into the library
+    anyway. Rather than add a silent delete, rejects are MOVED to _rejected/
+    beside the batch: bad files cannot reach iTunes, and nothing is destroyed.
+    Fixed 2026-11-01.
+    """
     print("\n  Quality check...")
     r = subprocess.run(
         ["python3", str(HERE / "check_quality.py"), str(folder)],
@@ -174,6 +232,28 @@ def run_quality_check(folder):
               if any(tag in l for tag in ["WARN", "FLAG", "REJECT", "PASS", "Summary"])]
     for line in issues:
         log(line.strip())
+
+    # Re-derive the verdicts in-process so we get paths, not just text.
+    try:
+        sys.path.insert(0, str(HERE))
+        from check_quality import analyze_file
+        folder = Path(folder)
+        bad = []
+        for f in sorted(folder.rglob("*")):
+            if f.is_file() and f.suffix.lower() in AUDIO_EXTS:
+                res = analyze_file(f)
+                if res["status"] == "REJECT":
+                    bad.append((f, res["issues"]))
+        if bad:
+            quarantine = folder / "_rejected"
+            quarantine.mkdir(exist_ok=True)
+            print(f"\n  ⛔ Quarantining {len(bad)} rejected file(s) — they will NOT be imported:")
+            for f, why in bad:
+                f.rename(quarantine / f.name)
+                log(f"✗ {f.name} → _rejected/  ({'; '.join(why)[:90]})")
+            log(f"Review or delete: {quarantine}")
+    except Exception as e:
+        print(f"\n  ⚠ Could not quarantine rejects ({e}). Check the report above by hand.")
 
 # ── 5. Analyze ────────────────────────────────────────────────────────────
 
@@ -290,6 +370,8 @@ def main():
     parser.add_argument("csv", help="CSV file with Artist,Title columns")
     parser.add_argument("--skip-analyze", action="store_true")
     parser.add_argument("--skip-import", action="store_true")
+    parser.add_argument("--force", action="store_true",
+                        help="ignore the iTunes dupe check and download everything")
     args = parser.parse_args()
 
     csv_path = Path(args.csv).expanduser()
@@ -304,9 +386,13 @@ def main():
     print(f"  dj_grab — {len(tracks)} tracks in list")
     print(f"{'='*55}\n")
 
-    # Step 1: iTunes dupe check
-    print("  Checking iTunes library for existing tracks...")
-    missing, found = filter_dupes(tracks)
+    # Step 1: iTunes dupe check (exact title match only — see itunes_match)
+    if args.force:
+        print("  --force: skipping the iTunes dupe check")
+        missing, found = filter_dupes(tracks, force=True)
+    else:
+        print("  Checking iTunes library for existing tracks...")
+        missing, found = filter_dupes(tracks)
 
     if found:
         print(f"\n  Already in library ({len(found)}) — skipping:")
@@ -320,6 +406,10 @@ def main():
     print(f"\n  To download ({len(missing)}):")
     for t in missing:
         log(f"· {t['Artist']} — {t['Title']}")
+        # Show other versions already owned, so a near-dupe is visible rather
+        # than silently cancelling the download the way it used to.
+        for n in t.get("_near", []):
+            log(f"    ↳ you already own a variant: {n}")
 
     # Step 2: fresh temp dir + filtered CSV
     batch_name  = f"dj_batch_{time.strftime('%Y%m%d_%H%M%S')}"

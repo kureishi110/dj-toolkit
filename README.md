@@ -19,23 +19,40 @@ Playlist assignment is automatic — `dj_grab.py` derives it from the artist map
 so there is no `--playlist` flag here. If you want to force a playlist, that
 lives on `slsk_batch_download.py --playlist "Melodic House"`.
 
-`tracks.csv` is two columns, `Artist,Title`. From there `dj_grab.py` runs the
-whole chain and everything else in this repo is a stage of it you can also run
-alone:
+`tracks.csv` is `Artist,Title`, plus optional `Album` and `Length` (seconds).
+Album and Length are worth filling in — they are what lets `sldl` tell an album
+original from a DJ edit of the same name. From there `dj_grab.py` runs the whole
+chain, and everything else in this repo is a stage of it you can also run alone:
 
-1. **Dedupe** against Apple Music over AppleScript, so you don't re-buy what you own
+1. **Dedupe** against Apple Music over AppleScript, on an **exact** title match
 2. **Download** via [`sldl`](https://github.com/fiso64/slsk-batchdl) into a fresh timestamped temp dir
-3. **Quality gate** — `check_quality.py` renders a spectrogram and reads the frequency cutoff
+3. **Quality gate** — `check_quality.py` reads the frequency cutoff; rejects move to `_rejected/`
 4. **Analyze** — `analyze_tracks.py` writes Camelot key + energy into the comment tag
-5. **Import** — `import_to_itunes.py` adds to Apple Music one file at a time
+5. **Import** — `import_to_itunes.py` verifies every add, and transcodes FLAC to WAV first
 6. **Classify** — artist-map first, file genre tag as fallback; a track can land in several playlists
+
+### Three things that are easy to get wrong here
+
+**Apple Music cannot play FLAC.** `add POSIX file` on a `.flac` returns exit
+code 0 and adds nothing at all. Any importer that trusts the exit code silently
+drops every FLAC it is given. `import_to_itunes.py` returns the new track's
+database ID and treats a missing ID as failure.
+
+**Apple Music ignores WAV tags on import.** A WAV's `LIST`/`INFO` chunk is not
+read, so WAVs arrive with no artist, album, or comment. Tags are read from the
+source file before the add and written back over AppleScript afterwards.
+
+**Dedupe has to be an exact match.** A `contains` test makes it impossible to
+fetch a different version of something you already own — asking for "Alejandro"
+matches "Alejandro (Quick Edit) (DMS Intro)" and cancels the download. Variants
+you already own are printed as near misses instead. `--force` skips the check.
 
 ## What each script does
 
 | Script | Does |
 |---|---|
 | `dj_grab.py` | The pipeline above. The only command you normally type. |
-| `check_quality.py` | Spectrogram + cutoff analysis. Catches MP3s upconverted to fake FLAC. |
+| `check_quality.py` | Spectrogram + cutoff analysis. Catches MP3s upconverted to fake FLAC. Takes folders; defaults to `_incomplete/`. |
 | `analyze_tracks.py` | Camelot key + 1–10 energy into the comment tag. Replaces Mixed In Key. |
 | `import_to_itunes.py` | AppleScript import that survives special characters in filenames. |
 | `resolve_spotify.py` | Spotify track URLs → `Artist,Title` CSV via the embed endpoint. No credentials needed. |

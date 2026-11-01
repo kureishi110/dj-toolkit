@@ -25,7 +25,7 @@ Current genre tags: Nu Disco, R&B, Dance Pop, Melodic House, Tech House, House, 
 
 Current playlists: Afro House, Alt Pop, Alt R&B, Dance Pop, Electronic Dance, Hip Hop Pop, House, Hyperpop, Indie Electronic, Indie Pop, Melodic House, New Grabs 1, New Grabs 2, Nu Disco, Progressive House, R&B, R&B Pop, Warm Up
 
-Library size: ~240 tracks (actively building)
+Library size: ~5,500 tracks (counted 2026-11-01; the old "~240" was badly stale)
 
 ---
 
@@ -47,10 +47,19 @@ All tools live in `~/Music/DJ Downloads/`.
 python3 ~/Music/DJ\ Downloads/dj_grab.py /tmp/tracks.csv
 ```
 ⛔ There is NO `--playlist` flag on dj_grab.py. Playlists are derived
-automatically from the artist map. The only flags are `--skip-analyze` and
-`--skip-import`.
+automatically from the artist map. Flags: `--skip-analyze`, `--skip-import`,
+`--force`.
+
+⭐ **`--force` is the one you will need.** The dupe check skips a track only on
+an EXACT title match. When she wants a DIFFERENT VERSION of something she
+already owns, pass `--force`. Variants she owns are printed as near misses
+either way, so a near-dupe is visible instead of silently cancelling the grab.
+
+⭐ **CSV columns: `Artist,Title,Album,Length`** (Album/Length optional, Length
+in seconds). Fill them in when a track exists in many versions — they are the
+only signal sldl has to tell an album original from a DJ edit.
 This is the ONLY download command Tanya needs to paste. It:
-1. Checks iTunes for dupes (skips already-owned tracks)
+1. Checks iTunes for dupes (EXACT title match only)
 2. Creates a fresh timestamped temp dir `/tmp/dj_batch_YYYYMMDD_HHMMSS/`
 3. Runs sldl on only the missing tracks
 4. Quality checks only the new download folder
@@ -93,7 +102,7 @@ python3 ~/Music/DJ\ Downloads/import_to_itunes.py <folder>
 
 ### If Tanya gives a screenshot or manual track list:
 1. Use AppleScript to check iTunes for each track title
-2. Write only the MISSING tracks to `/tmp/tracks.csv` (Artist, Title columns)
+2. Write only the MISSING tracks to `/tmp/tracks.csv` (Artist, Title, and Album/Length when the track has many versions)
 3. Show Tanya the dupe summary (what's already owned vs. what's being downloaded)
 4. Hand Tanya: `python3 ~/Music/DJ\ Downloads/dj_grab.py /tmp/tracks.csv`
 
@@ -108,10 +117,23 @@ Use AppleScript to set genres and add tracks to playlists. One track can live in
 ---
 
 ## Quality Rules (non-negotiable)
-- MP3 below 320kbps → delete, skip
-- FLAC/WAV with cutoff below 18kHz → WARN → delete, skip (upconverted)
-- FLAC/WAV with cutoff below 14kHz → REJECT → delete immediately
+- MP3 below 320kbps → FLAG → do not import
+- FLAC/WAV with cutoff below 18kHz → WARN → upconverted, do not import
+- FLAC/WAV with cutoff below 14kHz → REJECT → auto-moved to `_rejected/`
 - If a track fails twice on Soulseek, skip it — it doesn't exist in better quality there
+
+⚠️ **Nothing is auto-DELETED any more.** `dj_grab.py` moves REJECTs to
+`_rejected/` beside the batch, so they cannot reach iTunes but are recoverable.
+WARN and FLAG files are reported and left in place — review them yourself.
+(The old doc claimed deletes happened. They never did; files sailed through.)
+
+⚠️ **Apple Music cannot play FLAC.** `import_to_itunes.py` transcodes FLAC to
+WAV first. Never tell her a FLAC "imported" without checking it is really in
+the library — `add POSIX file` returns success for FLAC and adds nothing.
+
+⚠️ **Apple Music ignores WAV tags.** A freshly imported WAV has no artist,
+album, or comment until something sets them over AppleScript. The importer does
+this; if you add a WAV by hand, you have to.
 
 ---
 

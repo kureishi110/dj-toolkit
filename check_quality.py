@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 """
-DJ Quality Checker
-Analyzes audio files in _incomplete/, generates spectrogram images,
-detects frequency cutoffs, and flags suspicious files.
+DJ Quality Checker — catches lossy files wearing a lossless extension.
+
+Renders a spectrogram per file and reads where the frequency content actually
+stops. A 320kbps MP3 re-encoded as FLAC tags as lossless and sounds wrong on a
+loud system; the cutoff is the tell.
+
+Usage:
+    python3 check_quality.py                      # scan _incomplete/
+    python3 check_quality.py <folder> [<folder>]  # scan specific folders
+    python3 check_quality.py <folder> --verbose    # also list passes
+    python3 check_quality.py <folder> --strict     # exit 1 on REJECT/FLAG
 """
 
 import os
@@ -168,7 +176,7 @@ def main(folder=None, quiet=True):
         folder: Path to scan. Defaults to INCOMPLETE_DIR.
         quiet:  If True (default), suppress PASS output — only show problems.
     """
-    target = Path(folder) if folder else INCOMPLETE_DIR
+    target = Path(folder).expanduser() if folder else INCOMPLETE_DIR
     files = [
         f for f in target.rglob('*')
         if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS
@@ -238,4 +246,28 @@ def main(folder=None, quiet=True):
 
 
 if __name__ == '__main__':
-    main()
+    # ⛔ This used to be a bare `main()`, which ignored argv entirely and always
+    # rescanned _incomplete/. dj_grab.py has always called
+    # `check_quality.py <new_batch_folder>` — so the "quality check new files
+    # only" step never checked the new files, it re-walked the whole incomplete
+    # folder every run. Found 2026-11-01.
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Spectrogram + frequency-cutoff quality check for DJ audio.")
+    ap.add_argument("folders", nargs="*",
+                    help=f"folders to scan (default: {INCOMPLETE_DIR})")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="also list files that PASS")
+    ap.add_argument("--strict", action="store_true",
+                    help="exit non-zero if anything is REJECT or FLAG")
+    a = ap.parse_args()
+
+    all_results = []
+    for target in (a.folders or [None]):
+        if target is not None and not Path(target).expanduser().exists():
+            print(f"Folder not found: {target}")
+            sys.exit(1)
+        all_results += main(target, quiet=not a.verbose) or []
+
+    if a.strict and any(r['status'] in ('REJECT', 'FLAG') for r in all_results):
+        sys.exit(1)
